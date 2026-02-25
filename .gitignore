@@ -1,0 +1,11 @@
+# Build output
+out/
+
+# GTFS static data (downloaded at runtime)
+data/GTFS/
+
+# Realtime snapshots
+data/*.pb
+
+# Go toolchain
+*.exe
