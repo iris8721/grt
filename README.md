@@ -37,12 +37,16 @@ Requires Go 1.21+.
 go run .
 ```
 
-Serves on `http://localhost:8080` and opens it in your default browser
-(Windows / macOS / Linux).
+Serves on `http://localhost:8080` (loopback only) and opens it in your default
+browser (Windows / macOS / Linux). The GTFS cache lives in `data/GTFS/`
+relative to the working directory, so run it from the repo root.
+
+The page itself pulls Leaflet from unpkg and tiles from OpenStreetMap, so the
+browser needs internet access even though the server is local.
 
 ## Known limitations
 
-- No tests; feed schema changes upstream would need code changes.
+- No tests.
 - Route colors are assigned from a fixed palette, not official GRT branding.
 - If the static GTFS download fails on first run with no cache, the program
   exits — it needs the schedule data to label stops and trips.

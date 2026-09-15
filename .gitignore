@@ -9,3 +9,5 @@ data/*.pb
 
 # Go toolchain
 *.exe
+# Local build
+/grt
