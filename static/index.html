@@ -140,6 +140,12 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
 }).addTo(map);
 
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c]);
+}
+
 // ── Route shapes ───────────────────────────────────────────────────────────
 fetch('/api/shapes')
   .then(r => r.json())
@@ -151,7 +157,7 @@ fetch('/api/shapes')
         opacity: 0.55,
       }),
       onEachFeature: (f, layer) => {
-        layer.bindTooltip(f.properties.route_name, {
+        layer.bindTooltip(esc(f.properties.route_name), {
           sticky: true,
           direction: 'top',
           offset: [0, -4],
@@ -193,21 +199,21 @@ function delayHtml(s) {
 
 function makeTooltip(v) {
   const next = v.next_stops && v.next_stops.length ? v.next_stops[0].name : '—';
-  return `<b>${v.route_name}</b><br>→ ${v.headsign}<br><span style="color:#555">Next: ${next}</span>`;
+  return `<b>${esc(v.route_name)}</b><br>→ ${esc(v.headsign)}<br><span style="color:#555">Next: ${esc(next)}</span>`;
 }
 
 function makePopup(v) {
   const stops = (v.next_stops || []).map(s => {
-    const time = s.arr ? `<span style="float:right;color:#888">${s.arr}</span>` : '';
+    const time = s.arr ? `<span style="float:right;color:#888">${esc(s.arr)}</span>` : '';
     const late = s.delay > 60  ? ` <span style="color:#e74c3c">(+${Math.round(s.delay/60)}m)</span>` : '';
     const early= s.delay < -60 ? ` <span style="color:#27ae60">(${Math.round(s.delay/60)}m)</span>` : '';
-    return `<div style="padding:3px 0;border-bottom:1px solid #f0f0f0">${time}${s.name}${late}${early}</div>`;
+    return `<div style="padding:3px 0;border-bottom:1px solid #f0f0f0">${time}${esc(s.name)}${late}${early}</div>`;
   }).join('');
 
   return `<div class="veh-popup">
-    <div class="route">${v.route_name}</div>
-    <span class="tag" style="background:${v.color}">→ ${v.headsign}</span><br>
-    Vehicle <b>${v.id}</b> &nbsp;${delayHtml(v.delay_s)}
+    <div class="route">${esc(v.route_name)}</div>
+    <span class="tag" style="background:${esc(v.color)}">→ ${esc(v.headsign)}</span><br>
+    Vehicle <b>${esc(v.id)}</b> &nbsp;${delayHtml(v.delay_s)}
     ${stops ? `<div style="margin-top:8px;font-size:12px"><b>Upcoming stops</b>${stops}</div>` : ''}
   </div>`;
 }
@@ -249,7 +255,8 @@ es.onmessage = e => {
   let buses = 0, lrts = 0;
 
   (d.vehicles || []).forEach(v => {
-    seen.add(v.id);
+    const key = v.type + ':' + v.id;
+    seen.add(key);
     v.type === 'lrt' ? lrts++ : buses++;
 
     const icon  = makeIcon(v.color, v.type);
@@ -257,13 +264,13 @@ es.onmessage = e => {
 
     const tooltip = makeTooltip(v);
 
-    if (vehicles[v.id]) {
-      vehicles[v.id].setLatLng([v.lat, v.lon]);
-      vehicles[v.id].setIcon(icon);
-      vehicles[v.id].setPopupContent(popup);
-      vehicles[v.id].setTooltipContent(tooltip);
+    if (vehicles[key]) {
+      vehicles[key].setLatLng([v.lat, v.lon]);
+      vehicles[key].setIcon(icon);
+      vehicles[key].setPopupContent(popup);
+      vehicles[key].setTooltipContent(tooltip);
     } else {
-      vehicles[v.id] = L.marker([v.lat, v.lon], { icon })
+      vehicles[key] = L.marker([v.lat, v.lon], { icon })
         .bindTooltip(tooltip, { direction: 'top', offset: [0, -8] })
         .bindPopup(popup)
         .addTo(map);
@@ -271,10 +278,10 @@ es.onmessage = e => {
   });
 
   // Remove vehicles that left the feed
-  for (const id in vehicles) {
-    if (!seen.has(id)) {
-      vehicles[id].remove();
-      delete vehicles[id];
+  for (const key in vehicles) {
+    if (!seen.has(key)) {
+      vehicles[key].remove();
+      delete vehicles[key];
     }
   }
 
@@ -285,8 +292,8 @@ es.onmessage = e => {
   const alertsEl = document.getElementById('alerts');
   alertsEl.innerHTML = (d.alerts || []).map(a => `
     <div class="alert-card">
-      <strong>${a.routes.join(' · ')}</strong>
-      ${a.desc}
+      <strong>${esc(a.routes.join(' · '))}</strong>
+      ${esc(a.desc)}
     </div>
   `).join('');
 };
