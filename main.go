@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"runtime"
 	"time"
 )
 
@@ -54,7 +55,7 @@ func main() {
 	}()
 
 	time.Sleep(200 * time.Millisecond)
-	exec.Command("cmd", "/c", "start", fmt.Sprintf("http://localhost%s", httpPort)).Start()
+	openBrowser(fmt.Sprintf("http://localhost%s", httpPort))
 
 	go func() {
 		ticker := time.NewTicker(gtfsUpdateInterval)
@@ -92,5 +93,20 @@ func main() {
 	defer ticker.Stop()
 	for range ticker.C {
 		poll()
+	}
+}
+
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("could not open browser: %v", err)
 	}
 }
