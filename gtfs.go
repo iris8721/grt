@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -281,6 +282,13 @@ func extractZip(data []byte) (map[string][]byte, error) {
 	}
 	files := make(map[string][]byte, len(r.File))
 	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		name := path.Base(f.Name)
+		if name == "." || name == ".." || name == "/" || strings.ContainsRune(name, '\\') {
+			return nil, fmt.Errorf("bad entry name %q", f.Name)
+		}
 		rc, err := f.Open()
 		if err != nil {
 			return nil, fmt.Errorf("open %s: %w", f.Name, err)
@@ -290,7 +298,7 @@ func extractZip(data []byte) (map[string][]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", f.Name, err)
 		}
-		files[f.Name] = content
+		files[name] = content
 	}
 	return files, nil
 }
@@ -376,6 +384,33 @@ func mergeCSVByName(busData, lrtData []byte) ([]byte, error) {
 	return buf.Bytes(), w.Error()
 }
 
+func writeGTFS(files map[string][]byte) error {
+	tmp := gtfsDir + ".tmp"
+	old := gtfsDir + ".old"
+	os.RemoveAll(tmp)
+	os.RemoveAll(old)
+	if err := os.MkdirAll(tmp, 0755); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+	for name, data := range files {
+		if err := os.WriteFile(tmp+"/"+name, data, 0644); err != nil {
+			os.RemoveAll(tmp)
+			return fmt.Errorf("write %s: %w", name, err)
+		}
+	}
+	if _, err := os.Stat(gtfsDir); err == nil {
+		if err := os.Rename(gtfsDir, old); err != nil {
+			return fmt.Errorf("rename: %w", err)
+		}
+	}
+	if err := os.Rename(tmp, gtfsDir); err != nil {
+		os.Rename(old, gtfsDir)
+		return fmt.Errorf("rename: %w", err)
+	}
+	os.RemoveAll(old)
+	return nil
+}
+
 func downloadAndUpdateGTFS() error {
 	type zipResult struct {
 		label string
@@ -432,13 +467,5 @@ func downloadAndUpdateGTFS() error {
 		merged[name] = data
 	}
 
-	if err := os.MkdirAll(gtfsDir, 0755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
-	}
-	for name, data := range merged {
-		if err := os.WriteFile(gtfsDir+"/"+name, data, 0644); err != nil {
-			return fmt.Errorf("write %s: %w", name, err)
-		}
-	}
-	return nil
+	return writeGTFS(merged)
 }
