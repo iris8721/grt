@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 var routePalette = []string{
@@ -76,62 +77,80 @@ func (sd *StaticData) color(routeID string) string {
 	return "#888888"
 }
 
-func loadCSV(path string, keyCol, valCol int) (map[string]string, error) {
+type csvRow struct {
+	cols   map[string]int
+	fields []string
+}
+
+func (row csvRow) get(name string) string {
+	i, ok := row.cols[name]
+	if !ok || i >= len(row.fields) {
+		return ""
+	}
+	return row.fields[i]
+}
+
+func readCSV(path string, required []string, fn func(row csvRow)) error {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer f.Close()
 
 	r := csv.NewReader(f)
 	r.FieldsPerRecord = -1
-	r.Read()
+	header, err := r.Read()
+	if err != nil {
+		return fmt.Errorf("%s: header: %w", path, err)
+	}
+	cols := make(map[string]int, len(header))
+	for i, h := range header {
+		cols[strings.TrimSpace(strings.TrimPrefix(h, "\ufeff"))] = i
+	}
+	for _, name := range required {
+		if _, ok := cols[name]; !ok {
+			return fmt.Errorf("%s: missing column %q", path, name)
+		}
+	}
 
-	m := make(map[string]string)
 	for {
-		row, err := r.Read()
+		fields, err := r.Read()
 		if err == io.EOF {
-			break
+			return nil
 		}
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("%s: %w", path, err)
 		}
-		if keyCol < len(row) && valCol < len(row) {
-			m[row[keyCol]] = row[valCol]
-		}
+		fn(csvRow{cols, fields})
+	}
+}
+
+func loadCSV(path, keyCol, valCol string) (map[string]string, error) {
+	m := make(map[string]string)
+	err := readCSV(path, []string{keyCol, valCol}, func(row csvRow) {
+		m[row.get(keyCol)] = row.get(valCol)
+	})
+	if err != nil {
+		return nil, err
 	}
 	return m, nil
 }
 
 func loadStatic() (*StaticData, error) {
-	stops, err := loadCSV(gtfsDir+"/stops.txt", 0, 2)
+	stops, err := loadCSV(gtfsDir+"/stops.txt", "stop_id", "stop_name")
 	if err != nil {
 		return nil, fmt.Errorf("stops: %w", err)
 	}
 
-	routesFile, err := os.Open(gtfsDir + "/routes.txt")
+	routes := make(map[string]string)
+	err = readCSV(gtfsDir+"/routes.txt", []string{"route_id", "route_short_name", "route_long_name"}, func(row csvRow) {
+		routes[row.get("route_id")] = fmt.Sprintf("%s – %s", row.get("route_short_name"), row.get("route_long_name"))
+	})
 	if err != nil {
 		return nil, fmt.Errorf("routes: %w", err)
 	}
-	defer routesFile.Close()
-	rr := csv.NewReader(routesFile)
-	rr.FieldsPerRecord = -1
-	rr.Read()
-	routes := make(map[string]string)
-	for {
-		row, err := rr.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		if len(row) >= 4 {
-			routes[row[0]] = fmt.Sprintf("%s – %s", row[2], row[3])
-		}
-	}
 
-	headsigns, err := loadCSV(gtfsDir+"/trips.txt", 2, 3)
+	headsigns, err := loadCSV(gtfsDir+"/trips.txt", "trip_id", "trip_headsign")
 	if err != nil {
 		return nil, fmt.Errorf("trips: %w", err)
 	}
@@ -174,70 +193,48 @@ func buildShapesGeoJSON(sd *StaticData) ([]byte, error) {
 	type dirKey struct{ routeID, dir string }
 	shapeCounts := make(map[dirKey]map[string]int)
 
-	tf, err := os.Open(gtfsDir + "/trips.txt")
-	if err != nil {
-		return nil, fmt.Errorf("trips: %w", err)
-	}
-	tr := csv.NewReader(tf)
-	tr.FieldsPerRecord = -1
-	tr.Read()
-	for {
-		row, err := tr.Read()
-		if err == io.EOF {
-			break
+	err := readCSV(gtfsDir+"/trips.txt", []string{"route_id", "direction_id", "shape_id"}, func(row csvRow) {
+		sid := row.get("shape_id")
+		if sid == "" {
+			return
 		}
-		if err != nil || len(row) < 7 || row[6] == "" {
-			continue
-		}
-		k := dirKey{row[0], row[4]}
+		k := dirKey{row.get("route_id"), row.get("direction_id")}
 		if shapeCounts[k] == nil {
 			shapeCounts[k] = make(map[string]int)
 		}
-		shapeCounts[k][row[6]]++
+		shapeCounts[k][sid]++
+	})
+	if err != nil {
+		return nil, fmt.Errorf("trips: %w", err)
 	}
-	tf.Close()
 
 	canonical := make(map[string]dirKey)
 	for k, counts := range shapeCounts {
 		best, bestN := "", 0
 		for sid, n := range counts {
-			if n > bestN {
+			if n > bestN || (n == bestN && sid < best) {
 				best, bestN = sid, n
 			}
 		}
 		canonical[best] = k
 	}
 
-	sf, err := os.Open(gtfsDir + "/shapes.txt")
-	if err != nil {
-		return nil, fmt.Errorf("shapes: %w", err)
-	}
-	defer sf.Close()
-
-	sr := csv.NewReader(sf)
-	sr.FieldsPerRecord = -1
-	sr.Read()
-
 	shapePoints := make(map[string][]shapePoint)
-	for {
-		row, err := sr.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil || len(row) < 4 {
-			continue
-		}
-		sid := row[0]
+	err = readCSV(gtfsDir+"/shapes.txt", []string{"shape_id", "shape_pt_lat", "shape_pt_lon", "shape_pt_sequence"}, func(row csvRow) {
+		sid := row.get("shape_id")
 		if _, needed := canonical[sid]; !needed {
-			continue
+			return
 		}
-		lat, err1 := strconv.ParseFloat(row[1], 64)
-		lon, err2 := strconv.ParseFloat(row[2], 64)
-		seq, err3 := strconv.Atoi(row[3])
+		lat, err1 := strconv.ParseFloat(row.get("shape_pt_lat"), 64)
+		lon, err2 := strconv.ParseFloat(row.get("shape_pt_lon"), 64)
+		seq, err3 := strconv.Atoi(row.get("shape_pt_sequence"))
 		if err1 != nil || err2 != nil || err3 != nil {
-			continue
+			return
 		}
 		shapePoints[sid] = append(shapePoints[sid], shapePoint{lat, lon, seq})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("shapes: %w", err)
 	}
 
 	for sid := range shapePoints {
@@ -304,16 +301,85 @@ func extractZip(data []byte) (map[string][]byte, error) {
 	return files, nil
 }
 
-func mergeCSV(busData, lrtData []byte) []byte {
+func csvHeader(data []byte) []byte {
+	line, _, _ := bytes.Cut(data, []byte{'\n'})
+	return bytes.TrimSpace(bytes.TrimPrefix(line, []byte("\ufeff")))
+}
+
+func mergeCSV(busData, lrtData []byte) ([]byte, error) {
 	idx := bytes.IndexByte(lrtData, '\n')
 	if idx < 0 {
-		return busData
+		return busData, nil
+	}
+	if len(bytes.TrimSpace(busData)) == 0 {
+		return lrtData, nil
+	}
+	if !bytes.Equal(csvHeader(busData), csvHeader(lrtData)) {
+		return mergeCSVByName(busData, lrtData)
 	}
 	out := busData
-	if len(out) > 0 && out[len(out)-1] != '\n' {
+	if out[len(out)-1] != '\n' {
 		out = append(out, '\n')
 	}
-	return append(out, lrtData[idx+1:]...)
+	return append(out, lrtData[idx+1:]...), nil
+}
+
+func readAllCSV(data []byte) ([][]string, error) {
+	r := csv.NewReader(bytes.NewReader(data))
+	r.FieldsPerRecord = -1
+	rows, err := r.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > 0 && len(rows[0]) > 0 {
+		rows[0][0] = strings.TrimPrefix(rows[0][0], "\ufeff")
+	}
+	return rows, nil
+}
+
+func mergeCSVByName(busData, lrtData []byte) ([]byte, error) {
+	busRows, err := readAllCSV(busData)
+	if err != nil {
+		return nil, err
+	}
+	lrtRows, err := readAllCSV(lrtData)
+	if err != nil {
+		return nil, err
+	}
+
+	header := busRows[0]
+	col := make(map[string]int, len(header))
+	for i, h := range header {
+		col[h] = i
+	}
+	lrtHeader := lrtRows[0]
+	for _, h := range lrtHeader {
+		if _, ok := col[h]; !ok {
+			col[h] = len(header)
+			header = append(header, h)
+		}
+	}
+
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	w.Write(header)
+	out := make([]string, len(header))
+	for _, row := range busRows[1:] {
+		clear(out)
+		copy(out, row)
+		w.Write(out)
+	}
+	for _, row := range lrtRows[1:] {
+		clear(out)
+		for i, v := range row {
+			if i < len(lrtHeader) {
+				out[col[lrtHeader[i]]] = v
+			}
+		}
+		w.Write(out)
+	}
+	w.Flush()
+	return buf.Bytes(), w.Error()
 }
 
 func downloadAndUpdateGTFS() error {
@@ -357,11 +423,19 @@ func downloadAndUpdateGTFS() error {
 		merged[name] = data
 	}
 	for name, lrtData := range lrtFiles {
-		if busData, exists := merged[name]; exists && name != "agency.txt" {
-			merged[name] = mergeCSV(busData, lrtData)
-		} else if !exists {
+		busData, exists := merged[name]
+		if !exists {
 			merged[name] = lrtData
+			continue
 		}
+		if name == "agency.txt" {
+			continue
+		}
+		data, err := mergeCSV(busData, lrtData)
+		if err != nil {
+			return fmt.Errorf("merge %s: %w", name, err)
+		}
+		merged[name] = data
 	}
 
 	if err := os.MkdirAll(gtfsDir, 0755); err != nil {
