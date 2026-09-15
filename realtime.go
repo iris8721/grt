@@ -13,14 +13,22 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func fetchFeed(url string) (*gtfs.FeedMessage, error) {
-	resp, err := http.Get(url)
+var feedClient = &http.Client{Timeout: 15 * time.Second}
+
+func httpGet(c *http.Client, url string) ([]byte, error) {
+	resp, err := c.Get(url)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: %s", url, resp.Status)
+	}
+	return io.ReadAll(resp.Body)
+}
 
-	body, err := io.ReadAll(resp.Body)
+func fetchFeed(url string) (*gtfs.FeedMessage, error) {
+	body, err := httpGet(feedClient, url)
 	if err != nil {
 		return nil, err
 	}

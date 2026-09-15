@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var routePalette = []string{
@@ -271,14 +272,7 @@ func buildShapesGeoJSON(sd *StaticData) ([]byte, error) {
 	return json.Marshal(col)
 }
 
-func downloadZip(url string) ([]byte, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
-}
+var zipClient = &http.Client{Timeout: 2 * time.Minute}
 
 func extractZip(data []byte) (map[string][]byte, error) {
 	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
@@ -395,7 +389,7 @@ func downloadAndUpdateGTFS() error {
 	} {
 		src := src
 		go func() {
-			data, err := downloadZip(src.url)
+			data, err := httpGet(zipClient, src.url)
 			ch <- zipResult{src.label, data, err}
 		}()
 	}
