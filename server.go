@@ -4,6 +4,8 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -90,8 +92,7 @@ func startServer(app *App) error {
 		app.mu.RUnlock()
 
 		if data == nil {
-			http.Error(w, `{"type":"FeatureCollection","features":[]}`, http.StatusOK)
-			return
+			data = []byte(`{"type":"FeatureCollection","features":[]}`)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
@@ -107,7 +108,6 @@ func startServer(app *App) error {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 
 		ch := app.hub.addClient()
 		defer app.hub.removeClient(ch)
@@ -134,5 +134,15 @@ func startServer(app *App) error {
 		}
 	})
 
-	return http.ListenAndServe(httpPort, mux)
+	ln, err := net.Listen("tcp", httpAddr)
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		if err := srv.Serve(ln); err != nil {
+			log.Fatalf("server: %v", err)
+		}
+	}()
+	return nil
 }

@@ -23,6 +23,7 @@ const (
 	pollInterval       = 30 * time.Second
 	gtfsUpdateInterval = 24 * time.Hour
 	httpPort           = ":8080"
+	httpAddr           = "127.0.0.1" + httpPort
 )
 
 func main() {
@@ -47,19 +48,14 @@ func main() {
 
 	app.setStatic(sd, shapesJSON)
 
-	go func() {
-		log.Printf("Map server running at http://localhost%s", httpPort)
-		if err := startServer(app); err != nil {
-			log.Fatalf("server: %v", err)
-		}
-	}()
-
-	time.Sleep(200 * time.Millisecond)
+	if err := startServer(app); err != nil {
+		log.Fatalf("listen %s: %v", httpAddr, err)
+	}
+	log.Printf("Map server running at http://localhost%s", httpPort)
 	openBrowser(fmt.Sprintf("http://localhost%s", httpPort))
 
 	go func() {
 		ticker := time.NewTicker(gtfsUpdateInterval)
-		defer ticker.Stop()
 		for range ticker.C {
 			log.Println("[GTFS] Downloading updated static feed...")
 			if err := downloadAndUpdateGTFS(); err != nil {
@@ -90,7 +86,6 @@ func main() {
 
 	poll()
 	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
 	for range ticker.C {
 		poll()
 	}
@@ -108,5 +103,7 @@ func openBrowser(url string) {
 	}
 	if err := cmd.Start(); err != nil {
 		log.Printf("could not open browser: %v", err)
+		return
 	}
+	go cmd.Wait()
 }
