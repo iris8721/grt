@@ -124,6 +124,7 @@ type AlertMsg struct {
 
 type SSEMessage struct {
 	Ts          string       `json:"ts"`
+	GTFSLoaded  int64        `json:"gtfs_loaded"`
 	GTFSNextMin int          `json:"gtfs_next_min"`
 	Vehicles    []VehicleMsg `json:"vehicles"`
 	Alerts      []AlertMsg   `json:"alerts"`
@@ -271,6 +272,7 @@ func buildMessage(snap *Snapshot, sd *StaticData, gtfsUpdatedAt time.Time) []byt
 
 	b, _ := json.Marshal(SSEMessage{
 		Ts:          snap.FetchedAt.Format("15:04:05"),
+		GTFSLoaded:  gtfsUpdatedAt.Unix(),
 		GTFSNextMin: nextMin,
 		Vehicles:    vehicles,
 		Alerts:      alerts,

@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GRT Live Map</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -126,11 +127,13 @@
   <div class="row"><span>GTFS refresh</span><b id="gtfs-next">—</b></div>
   <div class="row"><span>Buses</span><b id="bus-count">—</b></div>
   <div class="row"><span>ION LRT</span><b id="lrt-count">—</b></div>
+  <div class="row" id="err-row" hidden><span>Feed errors</span><b id="err-count">—</b></div>
 </div>
 
 <div id="alerts"></div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 // ── Map ────────────────────────────────────────────────────────────────────
 const map = L.map('map', { zoomControl: true }).setView([43.4516, -80.4925], 12);
@@ -147,28 +150,35 @@ function esc(s) {
 }
 
 // ── Route shapes ───────────────────────────────────────────────────────────
-fetch('/api/shapes')
-  .then(r => r.json())
-  .then(geojson => {
-    L.geoJSON(geojson, {
-      style: f => ({
-        color:   f.properties.color,
-        weight:  3,
-        opacity: 0.55,
-      }),
-      onEachFeature: (f, layer) => {
-        layer.bindTooltip(esc(f.properties.route_name), {
-          sticky: true,
-          direction: 'top',
-          offset: [0, -4],
-        });
-        // Highlight on hover
-        layer.on('mouseover', () => layer.setStyle({ opacity: 1, weight: 4 }));
-        layer.on('mouseout',  () => layer.setStyle({ opacity: 0.55, weight: 3 }));
-      },
-    }).addTo(map);
-  })
-  .catch(e => console.warn('Shapes failed:', e));
+let shapesLayer = null;
+let shapesLoaded = null;
+
+function loadShapes(version) {
+  shapesLoaded = version;
+  fetch('/api/shapes')
+    .then(r => r.json())
+    .then(geojson => {
+      if (shapesLayer) shapesLayer.remove();
+      shapesLayer = L.geoJSON(geojson, {
+        style: f => ({
+          color:   f.properties.color,
+          weight:  3,
+          opacity: 0.55,
+        }),
+        onEachFeature: (f, layer) => {
+          layer.bindTooltip(esc(f.properties.route_name), {
+            sticky: true,
+            direction: 'top',
+            offset: [0, -4],
+          });
+          // Highlight on hover
+          layer.on('mouseover', () => layer.setStyle({ opacity: 1, weight: 4 }));
+          layer.on('mouseout',  () => layer.setStyle({ opacity: 0.55, weight: 3 }));
+        },
+      }).addTo(map);
+    })
+    .catch(e => console.warn('Shapes failed:', e));
+}
 
 // ── Vehicle markers ────────────────────────────────────────────────────────
 const vehicles = {};
@@ -251,6 +261,8 @@ es.onmessage = e => {
   document.getElementById('gtfs-next').textContent = d.gtfs_next_min + ' min';
   startCountdown(30);
 
+  if (d.gtfs_loaded !== shapesLoaded) loadShapes(d.gtfs_loaded);
+
   const seen = new Set();
   let buses = 0, lrts = 0;
 
@@ -287,6 +299,12 @@ es.onmessage = e => {
 
   document.getElementById('bus-count').textContent = buses;
   document.getElementById('lrt-count').textContent = lrts;
+
+  const errs = d.errors || [];
+  const errRow = document.getElementById('err-row');
+  errRow.hidden = errs.length === 0;
+  errRow.title = errs.join('\n');
+  document.getElementById('err-count').textContent = errs.length;
 
   // Alerts
   const alertsEl = document.getElementById('alerts');
