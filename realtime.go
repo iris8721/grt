@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	gtfs "github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs"
 	"google.golang.org/protobuf/proto"
@@ -153,16 +154,24 @@ func buildTUMap(feed *gtfs.FeedMessage) map[string][]*gtfs.TripUpdate_StopTimeUp
 
 const maxNextStops = 5
 
-func buildVehicles(vpFeed *gtfs.FeedMessage, tuFeed *gtfs.FeedMessage, vehicleType string, sd *StaticData) []VehicleMsg {
+func stopTimeUnix(stu *gtfs.TripUpdate_StopTimeUpdate) int64 {
+	if t := stu.GetArrival().GetTime(); t != 0 {
+		return t
+	}
+	return stu.GetDeparture().GetTime()
+}
+
+func buildVehicles(vpFeed *gtfs.FeedMessage, tuFeed *gtfs.FeedMessage, vehicleType string, sd *StaticData, now time.Time) []VehicleMsg {
 	if vpFeed == nil {
 		return nil
 	}
 	tuMap := buildTUMap(tuFeed)
+	nowUnix := now.Unix()
 
 	var out []VehicleMsg
 	for _, entity := range vpFeed.Entity {
 		v := entity.Vehicle
-		if v == nil {
+		if v == nil || v.Position == nil {
 			continue
 		}
 		pos := v.Position
@@ -170,12 +179,14 @@ func buildVehicles(vpFeed *gtfs.FeedMessage, tuFeed *gtfs.FeedMessage, vehicleTy
 		routeID := trip.GetRouteId()
 		tripID := trip.GetTripId()
 
-		stus := tuMap[tripID]
 		delay := int32(0)
 		var nextStops []StopMsg
-		for i, stu := range stus {
-			if i >= maxNextStops {
+		for _, stu := range tuMap[tripID] {
+			if len(nextStops) >= maxNextStops {
 				break
+			}
+			if t := stopTimeUnix(stu); t != 0 && t < nowUnix {
+				continue
 			}
 			d := int32(0)
 			arrTime := ""
@@ -185,7 +196,7 @@ func buildVehicles(vpFeed *gtfs.FeedMessage, tuFeed *gtfs.FeedMessage, vehicleTy
 					arrTime = time.Unix(t, 0).Local().Format("15:04")
 				}
 			}
-			if i == 0 {
+			if len(nextStops) == 0 {
 				delay = d
 			}
 			nextStops = append(nextStops, StopMsg{
@@ -211,9 +222,19 @@ func buildVehicles(vpFeed *gtfs.FeedMessage, tuFeed *gtfs.FeedMessage, vehicleTy
 	return out
 }
 
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max] + "…"
+}
+
 func buildMessage(snap *Snapshot, sd *StaticData, gtfsUpdatedAt time.Time) []byte {
-	vehicles := buildVehicles(snap.BusVP, snap.BusTU, "bus", sd)
-	vehicles = append(vehicles, buildVehicles(snap.LrtVP, snap.LrtTU, "lrt", sd)...)
+	vehicles := buildVehicles(snap.BusVP, snap.BusTU, "bus", sd, snap.FetchedAt)
+	vehicles = append(vehicles, buildVehicles(snap.LrtVP, snap.LrtTU, "lrt", sd, snap.FetchedAt)...)
 
 	var alerts []AlertMsg
 	if snap.Alerts != nil {
@@ -234,10 +255,7 @@ func buildMessage(snap *Snapshot, sd *StaticData, gtfsUpdatedAt time.Time) []byt
 					desc = stripHTML(t.GetText())
 				}
 			}
-			const maxDesc = 200
-			if len(desc) > maxDesc {
-				desc = desc[:maxDesc] + "…"
-			}
+			desc = truncate(desc, 200)
 			alerts = append(alerts, AlertMsg{
 				ID:     entity.GetId(),
 				Routes: routes,
